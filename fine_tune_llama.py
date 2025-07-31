@@ -53,8 +53,45 @@ peft_config = LoraConfig(
     task_type = "CAUSAL_LM" 
 )
 
-model = prepare_model_for_kbit_training(model)  # Prepare the model for k-bit training
-model = get_peft_model(model, peft_config)  # Apply the PEFT model configuration
+model = prepare_model_for_kbit_training(model)  # Prepare the model for k-bit training, storing weights in 4 bits
+model = get_peft_model(model, peft_config)  # Apply the PEFT model configuration, all layers except attention laters are frozen
 
 generation_configuration = model.generation_config
 generation_configuration.pad_token_id = tokenizer.eos_token_id
+generation_configuration.eos_token_id = tokenizer.eos_token_id
+generation_configuration.max_new_tokens = 256
+generation_configuration.temperature = 0.7
+generation_configuration.top_p = 0.9
+generation_configuration.do_sample = True
+
+def generaate(prompt) : 
+    generation_configuration.max_new_tokens = 20 
+
+    encoded = tokenizer.encode(prompt, add_special_tokens=True, return_tensors="pt").to(device)
+    with torch.inference_mode(): 
+        out = model.generate(input_ids=encoded, generation_config=generation_configuration, repetition_penalty = 2.0)
+    string_decoded = tokenizer.decode(out[0], clean_up_tokenization_spaces=True)
+    print(string_decoded) 
+
+
+train_arguments = transformers.TrainingArguments(
+    per_device_train_batch_size=1,  # Batch size per device during training
+    gradient_accumulation_steps=4,  # Number of updates steps to accumulate before performing a backward/update pass
+    num_train_epochs=1,  # Total number of training epochs
+    learning_rate=2e-4,  # Initial learning rate
+    fp16 = True,
+    optim="paged_adamw_8bit",
+    lr_scheduler_type = "cosine",  # Learning rate scheduler type
+    warmup_ratio = 0.05,
+    output_dir= "fine-tuning") 
+
+#initialize the trainer
+
+trainer = transformers.Trainer( 
+    model = model,
+    train_dataset = training_dataset,
+    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False), 
+    args = train_arguments 
+)
+
+model.config.use_cache = False  # Disable cache during training
